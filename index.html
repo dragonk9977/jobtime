@@ -127,14 +127,14 @@ tbody tr:hover{background:#f7f9fa}
 <body>
 <div class="container">
   <div class="top">
-    <h2>⏱️ 근무 시간 분석기 <span class="ver">v1.1</span></h2>
+    <h2>⏱️ 근무 시간 분석기 <span class="ver">v1.2</span></h2>
     <button id="resetBtn" class="btn red">🔄 전체 초기화</button>
   </div>
   <p class="desc">작업 시스템에서 내려받은 CSV(또는 엑셀) 원본을 올리면 작업자·일자별 장기 이석 시간을 자동으로 계산합니다. 모든 계산은 이 브라우저 안에서만 이루어지며 데이터는 어디에도 전송·저장되지 않습니다.</p>
 
   <div class="upload" id="dropZone">
-    <label><input type="file" id="fileInput" accept=".csv,.tsv,.txt,.xlsx,.xls,.xlsm" multiple>📁 파일 선택 (여러 개 가능)</label>
-    <p>여러 명의 원본 파일을 한 번에 <b>드래그 앤 드롭</b> 해도 됩니다. (CSV · XLSX 지원, 같은 작업ID는 자동으로 중복 제거)<br>작업 파일(workertask)과 <b>제보 처리 파일(cs_…)</b>을 함께 올리면 제보 처리 시각은 업무로 인정해 이석에서 제외합니다.</p>
+    <label><input type="file" id="fileInput" accept=".csv,.tsv,.txt,.xlsx,.xls,.xlsm,.zip" multiple>📁 파일 선택 (여러 개 가능)</label>
+    <p>여러 명의 원본 파일을 한 번에 <b>드래그 앤 드롭</b> 해도 됩니다. (CSV · XLSX · ZIP 지원, 같은 작업ID는 자동으로 중복 제거)<br>작업 파일(workertask)과 <b>제보 처리 파일(cs_…)</b>을 함께 올리면 제보 처리 시각은 업무로 인정해 이석에서 제외합니다.</p>
   </div>
   <div id="fileChips" class="files"></div>
   <div id="notices"></div>
@@ -208,7 +208,7 @@ tbody tr:hover{background:#f7f9fa}
   </div>
 
   <datalist id="reasonPresets"><option value="회의"><option value="검수"><option value="교육"><option value="면담"><option value="휴가"><option value="외근/출장"><option value="시스템 장애"><option value="기타 업무"></datalist>
-  <div class="foot">근무 시간 분석기 v1.1 · 브라우저 내부에서만 동작 (서버 전송 없음)</div>
+  <div class="foot">근무 시간 분석기 v1.2 · 브라우저 내부에서만 동작 (서버 전송 없음)</div>
 </div>
 <div class="toast" id="toast"></div>
 <div id="pdfModal"><div class="box">
@@ -335,6 +335,9 @@ function ingestAny(rows, fileName, store) {
   return isCS ? ingestCS(rows, fileName, store) : ingestRows(rows, fileName, store);
 }
 
+/* API로 받은 파일의 코드값(F/S/B/H/W, upd/dup/new/del)을 사내 툴 CSV와 같은 한글로 통일 */
+const STATUS_KO = { F: '완료', S: '작업제외', B: '반납', H: '보류', W: '작업중' };
+const KIND_KO = { upd: '수정', dup: 'CP중복', new: '신규', del: '삭제' };
 /* ---------- 행 → 작업 목록 ---------- */
 function ingestRows(rows, fileName, store) {
   const info = { name: fileName, total: 0, added: 0, dup: 0, invalid: 0, workers: new Set(), error: null };
@@ -363,8 +366,8 @@ function ingestRows(rows, fileName, store) {
     if (eSec < sSec) { info.invalid++; continue; }
     const id = idI >= 0 && row[idI] != null && String(row[idI]).trim() !== '' ? String(row[idI]).trim() : worker + '|' + s.date + '|' + sSec + '|' + eSec;
     if (store.tasks.has(id)) { info.dup++; continue; }
-    const status = stI >= 0 ? String(row[stI] ?? '').trim() : '';
-    store.tasks.set(id, { id, worker, status, kind: kI >= 0 ? String(row[kI] ?? '').trim() : '', date: s.date, s: sSec, e: eSec });
+    const status = stI >= 0 ? (STATUS_KO[String(row[stI] ?? '').trim()] || String(row[stI] ?? '').trim()) : '';
+    store.tasks.set(id, { id, worker, status, kind: kI >= 0 ? (KIND_KO[String(row[kI] ?? '').trim()] || String(row[kI] ?? '').trim()) : '', date: s.date, s: sSec, e: eSec });
     store.statuses.set(status, (store.statuses.get(status) || 0) + 1);
     info.added++; info.workers.add(worker);
   }
@@ -550,9 +553,8 @@ function decodeBuffer(buf) {
   catch (e) { return new TextDecoder('euc-kr').decode(buf); }
 }
 const hasHdr = r => r && r.some(c => { const t = String(c == null ? '' : c).replace(/\s+/g, ''); return t === '시작일시' || t === '시작날짜' || t === 'CS처리일시'; });
-async function readRows(file) {
-  const buf = await file.arrayBuffer();
-  const ext = file.name.toLowerCase().split('.').pop();
+async function readRowsBuf(buf, fileName) {
+  const ext = fileName.toLowerCase().split('.').pop();
   if (['xlsx', 'xls', 'xlsm'].includes(ext)) {
     if (typeof XLSX === 'undefined') throw new Error('엑셀 라이브러리를 불러오지 못했습니다');
     const wb = XLSX.read(buf, { type: 'array' });
@@ -566,13 +568,47 @@ async function readRows(file) {
   }
   return parseCSV(decodeBuffer(buf));
 }
+/* ZIP 읽기: 저장(무압축)·deflate 모두 지원 (브라우저 내장 DecompressionStream 사용) */
+async function unzip(buf) {
+  const dv = new DataView(buf), u8 = new Uint8Array(buf);
+  let e = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
+  if (e < 0) throw new Error('ZIP 형식이 아닙니다');
+  const n = dv.getUint16(e + 10, true); let p = dv.getUint32(e + 16, true); const out = [];
+  for (let k = 0; k < n; k++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const flag = dv.getUint16(p + 8, true), method = dv.getUint16(p + 10, true), csz = dv.getUint32(p + 20, true),
+      nl = dv.getUint16(p + 28, true), xl = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true), lho = dv.getUint32(p + 42, true);
+    const name = new TextDecoder((flag & 0x800) ? 'utf-8' : 'euc-kr').decode(u8.subarray(p + 46, p + 46 + nl));
+    p += 46 + nl + xl + cl;
+    if (name.endsWith('/')) continue;
+    const start = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true), comp = u8.subarray(start, start + csz);
+    let data;
+    if (method === 0) data = comp.slice().buffer;
+    else if (method === 8) {
+      if (typeof DecompressionStream === 'undefined') throw new Error('이 브라우저는 압축 ZIP을 지원하지 않습니다(Chrome 최신 버전 사용)');
+      const ds = new DecompressionStream('deflate-raw'), w = ds.writable.getWriter(); w.write(comp); w.close();
+      data = await new Response(ds.readable).arrayBuffer();
+    } else throw new Error('지원하지 않는 ZIP 압축 방식입니다');
+    out.push({ name: name.split('/').pop(), buf: data });
+  }
+  return out;
+}
 async function handleFiles(list) {
   for (const f of Array.from(list)) {
     try {
-      const rows = await readRows(f);
-      const info = ingestAny(rows, f.name, store);
-      if (!info.error && info.kind !== 'cs' && info.total >= 4900) info.workers.forEach(w => store.truncated.add(w));
-      ui.files.push(info);
+      const buf = await f.arrayBuffer();
+      const ext = f.name.toLowerCase().split('.').pop();
+      const entries = ext === 'zip' ? (await unzip(buf)).filter(x => /\.(csv|tsv|txt|xlsx|xls|xlsm)$/i.test(x.name)) : [{ name: f.name, buf }];
+      if (!entries.length) throw new Error('ZIP 안에 CSV/엑셀 파일이 없습니다');
+      for (const en of entries) {
+        try {
+          const rows = await readRowsBuf(en.buf, en.name);
+          const info = ingestAny(rows, en.name, store);
+          if (!info.error && info.kind !== 'cs' && info.total >= 4900) info.workers.forEach(w => store.truncated.add(w));
+          ui.files.push(info);
+        } catch (err) { ui.files.push({ name: en.name, error: err.message || String(err), total: 0, added: 0, dup: 0, invalid: 0, workers: new Set() }); }
+      }
     } catch (err) { ui.files.push({ name: f.name, error: err.message || String(err), total: 0, added: 0, dup: 0, invalid: 0, workers: new Set() }); }
   }
   renderStatusList();
@@ -912,7 +948,7 @@ function buildReport(o) {
         return `<tr><td>${esc(nm(w))}</td><td>${shortDate(sg.date)}</td><td>${fmtHM(sg.s)}~${fmtHM(sg.e)}</td><td>${kind}</td><td>${fmtDur(sg.d)}</td><td class="l">${esc(why.join(', ')) || '<span class="dim">-</span>'}</td><td>${sg.eff.excl > 0 ? '남은 ' + fmtDur(sg.d - sg.eff.excl) : '<span class="dim">미처리</span>'}</td></tr>`;
       }).join('') + '</tbody></table>';
   }
-  return h + '<div class="foot2">근무 시간 분석기 v1.1</div>';
+  return h + '<div class="foot2">근무 시간 분석기 v1.2</div>';
 }
 function printReport(o) {
   $('printArea').innerHTML = buildReport(o);
