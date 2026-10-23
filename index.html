@@ -127,7 +127,7 @@ tbody tr:hover{background:#f7f9fa}
 <body>
 <div class="container">
   <div class="top">
-    <h2>⏱️ 근무 시간 분석기 <span class="ver">v1.2</span></h2>
+    <h2>⏱️ 근무 시간 분석기 <span class="ver">v1.3</span></h2>
     <button id="resetBtn" class="btn red">🔄 전체 초기화</button>
   </div>
   <p class="desc">작업 시스템에서 내려받은 CSV(또는 엑셀) 원본을 올리면 작업자·일자별 장기 이석 시간을 자동으로 계산합니다. 모든 계산은 이 브라우저 안에서만 이루어지며 데이터는 어디에도 전송·저장되지 않습니다.</p>
@@ -208,7 +208,7 @@ tbody tr:hover{background:#f7f9fa}
   </div>
 
   <datalist id="reasonPresets"><option value="회의"><option value="검수"><option value="교육"><option value="면담"><option value="휴가"><option value="외근/출장"><option value="시스템 장애"><option value="기타 업무"></datalist>
-  <div class="foot">근무 시간 분석기 v1.2 · 브라우저 내부에서만 동작 (서버 전송 없음)</div>
+  <div class="foot">근무 시간 분석기 v1.3 · 브라우저 내부에서만 동작 (서버 전송 없음)</div>
 </div>
 <div class="toast" id="toast"></div>
 <div id="pdfModal"><div class="box">
@@ -948,7 +948,7 @@ function buildReport(o) {
         return `<tr><td>${esc(nm(w))}</td><td>${shortDate(sg.date)}</td><td>${fmtHM(sg.s)}~${fmtHM(sg.e)}</td><td>${kind}</td><td>${fmtDur(sg.d)}</td><td class="l">${esc(why.join(', ')) || '<span class="dim">-</span>'}</td><td>${sg.eff.excl > 0 ? '남은 ' + fmtDur(sg.d - sg.eff.excl) : '<span class="dim">미처리</span>'}</td></tr>`;
       }).join('') + '</tbody></table>';
   }
-  return h + '<div class="foot2">근무 시간 분석기 v1.2</div>';
+  return h + '<div class="foot2">근무 시간 분석기 v1.3</div>';
 }
 function printReport(o) {
   $('printArea').innerHTML = buildReport(o);
@@ -969,6 +969,20 @@ $('pcGo').addEventListener('click', () => {
   if (!o.summary && !o.daily && !o.off && o.seg === 'none') return toast('포함할 내용을 선택해주세요');
   $('pdfModal').classList.remove('on'); printReport(o);
 });
+
+
+/* ---------- 사내 툴(Tampermonkey) 연동: 부모 창이 보낸 작업 데이터를 파일 없이 바로 분석 ---------- */
+window.addEventListener('message', e => {
+  const d = e.data;
+  if (!d || d.type !== 'wta-data' || e.source !== window.parent) return;
+  (d.datasets || []).forEach(ds => {
+    const info = ingestAny(ds.rows, ds.name, store);
+    if (!info.error && info.kind !== 'cs' && (info.total === 4999 || info.total === 5000)) info.workers.forEach(w => store.truncated.add(w));
+    ui.files.push(info);
+  });
+  renderStatusList(); recompute();
+});
+if (window.parent !== window) window.parent.postMessage({ type: 'wta-ready' }, '*');
 
 if (typeof window !== 'undefined') window.__wta = { store, ui, ingestRows, recompute, refreshAll, buildReport, openPdfModal, reportOptions };
 
