@@ -127,7 +127,7 @@ tbody tr:hover{background:#f7f9fa}
 <body>
 <div class="container">
   <div class="top">
-    <h2>⏱️ 근무 시간 분석기 <span class="ver">v1.3</span></h2>
+    <h2>⏱️ 근무 시간 분석기 <span class="ver">v1.4</span></h2>
     <button id="resetBtn" class="btn red">🔄 전체 초기화</button>
   </div>
   <p class="desc">작업 시스템에서 내려받은 CSV(또는 엑셀) 원본을 올리면 작업자·일자별 장기 이석 시간을 자동으로 계산합니다. 모든 계산은 이 브라우저 안에서만 이루어지며 데이터는 어디에도 전송·저장되지 않습니다.</p>
@@ -208,7 +208,7 @@ tbody tr:hover{background:#f7f9fa}
   </div>
 
   <datalist id="reasonPresets"><option value="회의"><option value="검수"><option value="교육"><option value="면담"><option value="휴가"><option value="외근/출장"><option value="시스템 장애"><option value="기타 업무"></datalist>
-  <div class="foot">근무 시간 분석기 v1.3 · 브라우저 내부에서만 동작 (서버 전송 없음)</div>
+  <div class="foot">근무 시간 분석기 v1.4 · 브라우저 내부에서만 동작 (서버 전송 없음)</div>
 </div>
 <div class="toast" id="toast"></div>
 <div id="pdfModal"><div class="box">
@@ -225,6 +225,7 @@ tbody tr:hover{background:#f7f9fa}
     <div class="wlist"><table><thead><tr><th>작업자</th><th>PDF에 포함</th><th>익명 처리</th></tr></thead><tbody id="pcWorkers"></tbody></table></div>
   </fieldset>
   <div class="notice" style="margin-top:12px">익명 처리해도 <b>직접 입력한 사유 문구</b>는 그대로 나옵니다. 사유에 이름을 적었다면 확인해 주세요. 인쇄 창에서 대상을 <b>‘PDF로 저장’</b>으로 선택하고, <b>‘배경 그래픽’</b>을 켜면 색이 함께 저장됩니다.</div>
+  <div id="pcPreview" class="desc" style="margin-top:10px;font-weight:bold;color:#2c3e50"></div>
   <div class="acts"><button class="btn gray" id="pcCancel">취소</button><button class="btn orange" id="pcGo">PDF 만들기</button></div>
 </div></div>
 <div id="printArea" class="rp"></div>
@@ -876,7 +877,16 @@ $('resetBtn').addEventListener('click', () => {
 function openPdfModal() {
   ui.pcList = ui.base.filter(w => w.nDays > 0 || w.off.n > 0);
   $('pcWorkers').innerHTML = ui.pcList.map((w, i) => `<tr><td>${esc(w.name)}</td><td><input type="checkbox" class="pcInc" data-i="${i}" checked></td><td><input type="checkbox" class="pcAnon" data-i="${i}"></td></tr>`).join('');
+  ['pcSummary', 'pcDaily', 'pcOff'].forEach(id => { $(id).checked = true; });   // 열 때마다 기본값으로 되돌림
+  $('pcSeg').value = 'none';
+  updatePcPreview();
   $('pdfModal').classList.add('on');
+}
+function updatePcPreview() {
+  const o = reportOptions(), parts = [];
+  if (o.summary) parts.push('요약'); if (o.daily) parts.push('일자별'); if (o.off) parts.push('시간외 작업');
+  if (o.seg !== 'none') parts.push(o.seg === 'done' ? '이석 구간(처리된 것)' : '이석 구간(전체)');
+  $('pcPreview').textContent = `PDF에 들어갈 내용: ${parts.join(' · ') || '없음'} / 대상 ${o.items.length}명(익명 ${o.items.filter(x => x.anon).length}명)`;
 }
 function reportOptions() {
   const inc = [...document.querySelectorAll('.pcInc')], an = [...document.querySelectorAll('.pcAnon')];
@@ -948,7 +958,7 @@ function buildReport(o) {
         return `<tr><td>${esc(nm(w))}</td><td>${shortDate(sg.date)}</td><td>${fmtHM(sg.s)}~${fmtHM(sg.e)}</td><td>${kind}</td><td>${fmtDur(sg.d)}</td><td class="l">${esc(why.join(', ')) || '<span class="dim">-</span>'}</td><td>${sg.eff.excl > 0 ? '남은 ' + fmtDur(sg.d - sg.eff.excl) : '<span class="dim">미처리</span>'}</td></tr>`;
       }).join('') + '</tbody></table>';
   }
-  return h + '<div class="foot2">근무 시간 분석기 v1.3</div>';
+  return h + '<div class="foot2">근무 시간 분석기 v1.4</div>';
 }
 function printReport(o) {
   $('printArea').innerHTML = buildReport(o);
@@ -959,10 +969,12 @@ function printReport(o) {
   setTimeout(() => window.print(), 80);
 }
 $('pdfBtn').addEventListener('click', openPdfModal);
+['pcSummary', 'pcDaily', 'pcOff', 'pcSeg'].forEach(id => $(id).addEventListener('change', updatePcPreview));
+$('pcWorkers').addEventListener('change', updatePcPreview);
 $('pcCancel').addEventListener('click', () => $('pdfModal').classList.remove('on'));
 $('pdfModal').addEventListener('click', e => { if (e.target === $('pdfModal')) $('pdfModal').classList.remove('on'); });
-$('pcAllAnon').addEventListener('click', () => document.querySelectorAll('.pcAnon').forEach(x => { x.checked = true; }));
-$('pcNoAnon').addEventListener('click', () => document.querySelectorAll('.pcAnon').forEach(x => { x.checked = false; }));
+$('pcAllAnon').addEventListener('click', () => { document.querySelectorAll('.pcAnon').forEach(x => { x.checked = true; }); updatePcPreview(); });
+$('pcNoAnon').addEventListener('click', () => { document.querySelectorAll('.pcAnon').forEach(x => { x.checked = false; }); updatePcPreview(); });
 $('pcGo').addEventListener('click', () => {
   const o = reportOptions();
   if (!o.items.length) return toast('PDF에 포함할 작업자를 선택해주세요');
